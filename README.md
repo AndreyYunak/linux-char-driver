@@ -49,9 +49,20 @@ dmesg
 ```
 
 ## IOCTL вызовы
-Переключение режима работы вызовов read\write из блокирующих \ не блокирующих и обратно выполняютс с помощью стандартного вызова:
+1. Переключение режима работы вызовов read\write из блокирующих \ не блокирующих и обратно выполняютс с помощью стандартного вызова:
 ```c
 ioctl(fd, FIONBIO, &f)
 ```
 где fd - файловый дескриптор файла устройства, f - переменная устанавливающая блокирующий (0) и не блокирующий (1) вызовы.
 
+
+2.  Получение информации о последней операции чтения и записи в буфер:
+```c
+ioctl(fd, BP_IOC_GETWRITERS_TIME, &time);
+ioctl(fd, BP_IOC_GETWRITERS_PID, &pid);
+ioctl(fd, BP_IOC_GETWRITERS_COMM, &comm);
+		
+ioctl(fd, BP_IOC_GETREADERS_TIME, &time);
+ioctl(fd, BP_IOC_GETREADERS_PID, &pid);
+ioctl(fd, BP_IOC_GETREADERS_COMM, &comm);
+```
