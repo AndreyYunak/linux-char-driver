@@ -9,6 +9,8 @@
 #include <linux/fcntl.h>
 #include <linux/wait.h>
 
+#include "chdr.h"
+
 
 MODULE_AUTHOR("Andrey Yunak");
 MODULE_LICENSE("Dual MIT/GPL");
@@ -30,6 +32,8 @@ struct bp_dev{
 	struct mutex lock;		/* mutual exclusion mutex */
 	wait_queue_head_t inq, outq;		/* read and write queues */
 	int nreaders, nwriters;	/* number of openings for r/w */
+	struct bp_user readers;
+	struct bp_user writers;
 };
 struct bp_dev *bp_device;
 
@@ -117,11 +121,19 @@ static ssize_t bp_device_read(struct file *filp, char __user *buf, size_t count,
 	dev->rp += count;
 	if (dev->rp == dev->end)
 		dev->rp = dev->buffer; /* wrapped */
+	
+	dev->readers.time = ktime_get_real_ns();
+	dev->readers.pid = current->pid;
+	memcpy((dev->readers.comm), (current->comm), TASK_COMM_LEN);
+	
 	mutex_unlock (&dev->lock);
 
 	/* finally, awake any writers and return */
 	wake_up_interruptible(&dev->outq);
 	printk(KERN_INFO "\"%s\" did read %li bytes\n",current->comm, (long)count);
+	printk(KERN_INFO "\"%llu\" dev->readers.time\n", dev->readers.time);
+	printk(KERN_INFO "\"%d\" dev->readers.pid\n", dev->readers.pid);
+	printk(KERN_INFO "\"%s\" dev->readers.comm\n", dev->readers.comm);
 	return count;
 };
 
@@ -184,6 +196,11 @@ static ssize_t bp_device_write(struct file *filp, const char __user *buf, size_t
 		return -EFAULT;
 	}
 	dev->wp += count;
+	
+	dev->writers.time = ktime_get_real_ns();
+	dev->writers.pid = current->pid;
+	memcpy((dev->writers.comm), (current->comm), TASK_COMM_LEN);
+	
 	if (dev->wp == dev->end)
 		dev->wp = dev->buffer; /* wrapped */
 	mutex_unlock(&dev->lock);
@@ -191,9 +208,57 @@ static ssize_t bp_device_write(struct file *filp, const char __user *buf, size_t
 	/* finally, awake any reader */
 	wake_up_interruptible(&dev->inq);  /* blocked in read() and select() */
 
+	printk(KERN_INFO "\"%llu\" dev->writers.time\n", dev->writers.time);
+	printk(KERN_INFO "\"%d\" dev->writers.pid\n", dev->writers.pid);
+	printk(KERN_INFO "\"%s\" dev->writers.comm\n", dev->writers.comm);
+	
+	
 	printk(KERN_INFO "\"%s\" did write %li bytes\n",current->comm, (long)count);
 	return count;
 };
+
+
+long bp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+
+	int retval = 0;
+	struct bp_dev *dev = filp->private_data;
+	
+	
+	if (_IOC_TYPE(cmd) != BP_IOC_MAGIC) return -ENOTTY;
+	
+	switch(cmd) {
+
+	case BP_IOC_GETWRITERS_TIME:
+		retval = __put_user((dev->writers.time), (u64 __user *)arg);
+		break;
+		
+	case BP_IOC_GETWRITERS_PID:
+		retval = copy_to_user((int __user *)arg, &(dev->writers.pid), sizeof(dev->writers.pid));
+		break;	
+		
+	case BP_IOC_GETWRITERS_COMM:
+		retval = copy_to_user((void __user *)arg, &(dev->writers.comm), sizeof(dev->writers.comm));
+		break;		
+		
+	case BP_IOC_GETREADERS_TIME:
+		retval = __put_user((dev->readers.time), (u64 __user *)arg);
+		break;
+		
+	case BP_IOC_GETREADERS_PID:
+		retval = copy_to_user((int __user *)arg, &(dev->readers.pid), sizeof(dev->readers.pid));
+		break;	
+		
+	case BP_IOC_GETREADERS_COMM:
+		retval = copy_to_user((void __user *)arg, &(dev->readers.comm), sizeof(dev->readers.comm));
+		break;	
+	
+	default:  // redundant, as cmd was checked against MAXNR 
+		return -ENOTTY;	
+	}
+	return retval;
+    
+}
 
 
 
@@ -204,7 +269,8 @@ struct file_operations bp_dev_fops = {
 	.read =		bp_device_read,
 	.write =	bp_device_write,
 	.open =		bp_device_open,
-	.release =	bp_device_release
+	.release =	bp_device_release,
+	.unlocked_ioctl = bp_ioctl,
 };
 
 static void bp_device_setup_cdev(struct bp_dev *dev)
